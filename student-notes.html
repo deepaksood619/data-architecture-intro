@@ -1,0 +1,204 @@
+<html><head><meta charset="utf-8"><title>Where does your data live? - Data Architecture intro (student notes)</title></head><body>
+<h1>Where does your data live?</h1>
+<p><i>Data Architecture course · Intro session · student notes (30-minute talk)</i></p>
+<p>By the end of this session you should be able to look at a data problem and say <b>which store fits, why, and roughly what it costs</b>. These notes cover every slide, the numbers we measured in the live demo, the demo queries so you can re-run them, and a self-check quiz.</p>
+
+<h2>1. The map: the whole data architecture</h2>
+<p>Data flows left to right through six layers. Five concerns cut across every layer. This course has one or more sessions on each box.</p>
+<table border="1" cellpadding="6">
+<tr><th>Layer</th><th>What it does</th><th>Typical tools</th><th>Course sessions</th></tr>
+<tr><td>Sources</td><td>Where data is born</td><td>App databases, SaaS APIs, event streams, files</td><td>S10 Data contracts</td></tr>
+<tr><td>Ingestion</td><td>Moves data in</td><td>Batch ELT, log-based CDC, Kafka</td><td>S11, S12</td></tr>
+<tr><td><b>Storage (today)</b></td><td>Keeps data cheap and durable</td><td>S3/GCS, Parquet/ORC/Avro, Iceberg/Delta</td><td>S1, S2, S4</td></tr>
+<tr><td>Compute &amp; modeling</td><td>Shapes data for use</td><td>Snowflake, BigQuery, Spark, DuckDB, dbt</td><td>S3, S5-S8</td></tr>
+<tr><td>Serving</td><td>Makes data fast to ask</td><td>Redis, ClickHouse/Pinot, semantic layer, reverse ETL</td><td>S13-S15</td></tr>
+<tr><td>Consumption</td><td>Uses the data</td><td>BI, apps, ML, RAG/vector search</td><td>S21</td></tr>
+</table>
+<p><b>Cross-cutting:</b> Orchestration (S9) · Governance &amp; security (S19) · Observability (S20) · FinOps (S18) · CI/CD and Infrastructure-as-Code (S16, S17).<br>
+<b>Capstone:</b> S22 design the whole architecture, S23 review cost and governance, S24 defend it.</p>
+
+<h2>2. The four stores we compare</h2>
+<table border="1" cellpadding="6">
+<tr><th>Store</th><th>What it is</th><th>Great at</th><th>Weak at</th><th>Typical use</th></tr>
+<tr><td><b>Redis</b></td><td>In-memory key → value store</td><td>Sub-millisecond reads, key expiry (TTL), counters</td><td>RAM is expensive; no ad-hoc queries</td><td>Sessions, caches, rate limits, leaderboards</td></tr>
+<tr><td><b>Postgres</b></td><td>Row-oriented relational database (OLTP)</td><td>ACID transactions, indexes, fast updates</td><td>Scanning wide tables for analytics</td><td>System of record, app backends, orders, profiles</td></tr>
+<tr><td><b>DuckDB / OLAP</b></td><td>Columnar analytical engine</td><td>Scans, aggregations, compression, SQL directly on files</td><td>Single-row updates, many small writes</td><td>Analytics, BI, warehouses, embedded/laptop</td></tr>
+<tr><td><b>S3 + Parquet</b></td><td>Object storage holding open columnar files</td><td>Cheapest durable bytes, infinite scale, decoupled compute</td><td>High first-byte latency, immutable files</td><td>Data lake, landing zone, archives, history</td></tr>
+</table>
+<p>The same data can live in all four. Each answers a different question well.</p>
+
+<h2>3. Which store? Speed vs cost</h2>
+<p>Every store trades speed against cost. Fast and cheap do not coexist, so architecture means putting each dataset on the <b>cheapest tier that still meets its latency need</b>. Order-of-magnitude figures (storage only, us-east-1-style list prices; they change over time, so re-check before relying on them):</p>
+<table border="1" cellpadding="6">
+<tr><th>Store</th><th>Simple-read latency</th><th>Storage cost</th></tr>
+<tr><td>Redis (RAM)</td><td>~0.2 ms</td><td>~$10,000 per TB-month</td></tr>
+<tr><td>Postgres (SSD)</td><td>~2 ms</td><td>~$110 per TB-month</td></tr>
+<tr><td>DuckDB / OLAP</td><td>~10 ms</td><td>~$80 per TB-month plus compute</td></tr>
+<tr><td>S3 + Parquet</td><td>~80 ms first byte</td><td>~$23 per TB-month</td></tr>
+</table>
+
+<h3>Check yourself: four scenarios</h3>
+<table border="1" cellpadding="6">
+<tr><th>Scenario</th><th>Best store</th><th>Why</th></tr>
+<tr><td>Shopping-cart sessions that expire in 30 minutes, read on every page view</td><td>Redis</td><td>In-memory with native TTL: sub-ms reads and automatic expiry</td></tr>
+<tr><td>Customer profiles edited by the app, read by ID, must never lose a write</td><td>Postgres</td><td>ACID, all fields of a row stored together, indexed by key</td></tr>
+<tr><td>5 years of orders; finance asks a new SUM / GROUP BY every week</td><td>DuckDB / columnar OLAP</td><td>Reads only the columns the query needs and compresses them</td></tr>
+<tr><td>50 TB of raw clickstream logs queried maybe once a month</td><td>S3 + Parquet</td><td>Cheapest durable bytes; start an engine only when needed</td></tr>
+</table>
+<p>"Just use Postgres" would have been wrong three times out of four.</p>
+
+<h2>4. Deep dive (Session 2): file formats &amp; storage strategy</h2>
+<h3>4.1 Row store vs column store</h3>
+<p>The same logical table can be laid out on disk two ways. A <b>row store</b> keeps each record's values together. A <b>column store</b> keeps each column's values together.</p>
+<ul>
+<li><b>Get one whole order (point read):</b> the row store reads one contiguous block (1 seek). The column store must gather one value from each of 5 columns (5 seeks). This is why OLTP engines are row stores.</li>
+<li><b>SUM(amount) over all orders (analytic scan):</b> the row store drags every column through memory to reach one (reads all 40 values in our toy example). The column store reads exactly one contiguous column. This is why OLAP engines are column stores.</li>
+<li><b>Compression:</b> a column holds one type, so dictionary, delta and run-length encoding shrink it 3-10x. A row mixes types, so only generic compression helps. Low-cardinality columns (status, country) are almost free to store in columnar formats.</li>
+</ul>
+
+<h3>4.2 Anatomy of a Parquet file</h3>
+<p>A Parquet file is split into <b>row groups</b> (about 120,000 rows each in our file). Inside each row group, every column is stored as its own <b>column chunk</b>. At the end of the file a <b>footer</b> stores the schema, the <b>min and max</b> of every chunk, and offsets. An engine reads the footer first, then decides which chunks it can skip.</p>
+<p>Footer of the real 5M-row file used in the demo (41 row groups):</p>
+<table border="1" cellpadding="6">
+<tr><th>Row group</th><th>Column</th><th>Min</th><th>Max</th><th>Bytes (zstd)</th></tr>
+<tr><td>0</td><td>order_id</td><td>1</td><td>122,880</td><td>162,139</td></tr>
+<tr><td>0</td><td>status</td><td>cancelled</td><td>shipped</td><td>26,173</td></tr>
+<tr><td>1</td><td>order_id</td><td>122,881</td><td>245,760</td><td>124,817</td></tr>
+</table>
+<p><code>order_id</code> ranges never overlap, so whole row groups can be skipped. <code>status</code> has the same min/max everywhere, so it is useless for skipping.</p>
+
+<h3>4.3 Skipping data (predicate pushdown)</h3>
+<ul>
+<li><code>WHERE order_id = 4200000</code>: the footer shows only one row group can contain it, so <b>1 of 41</b> is read (about 6 ms locally).</li>
+<li><code>WHERE customer_id = 4242</code>: every row group's range spans 1 to 200,000, so <b>41 of 41</b> are read (about 12 ms locally).</li>
+<li><b>Lesson:</b> sort or cluster data by the column you filter on most. Locally the gap is only about 2x because fixed HTTP overhead dominates; on real S3 each skipped row group is a skipped network request, so the gap grows with latency and data size. The same idea is called clustering in Snowflake and BigQuery (Session 3).</li>
+</ul>
+
+<h3>4.4 Partitioning</h3>
+<p>Folder names carry partition values, e.g. <code>orders_by_month/order_year=2025/order_month=6/part.parquet</code>. A query filtering on year and month opens <b>1 of 24 files</b>; with no filter it opens all 24. The cheapest query is the one that never touches the data.</p>
+<table border="1" cellpadding="6">
+<tr><th>Partition key</th><th>Verdict</th><th>Why</th></tr>
+<tr><td>order_year / order_month</td><td>Good</td><td>24 folders, matches the filter, similar sizes</td></tr>
+<tr><td>customer_id</td><td>Bad</td><td>200,000 folders of ~25 rows: the <i>small-files problem</i>; listing and opening files costs more than reading data</td></tr>
+<tr><td>country</td><td>Careful</td><td><i>Skew</i>: IN holds 17% of rows, BR only 5%, so one partition is ~3x its peers and one worker stays busy while others idle</td></tr>
+</table>
+<p>Rule of thumb: partition on <b>low-cardinality columns you always filter by</b> (date, region); never on ids.</p>
+
+<h3>4.5 File formats at a glance</h3>
+<table border="1" cellpadding="6">
+<tr><th></th><th>Parquet</th><th>ORC</th><th>Avro</th></tr>
+<tr><td>Layout</td><td>Columnar</td><td>Columnar</td><td>Row</td></tr>
+<tr><td>Best for</td><td>Analytics, data lakes</td><td>Hive / Hadoop</td><td>Streaming, Kafka</td></tr>
+</table>
+
+<h2>5. Live demo: same 5,000,000 orders in four engines</h2>
+<p>One synthetic <code>orders</code> table (5M rows, 13 columns, 2024-2025) loaded into: Redis (the hot last 300k orders as hashes, plus a hand-built per-customer index and one precomputed aggregate), Postgres (row store with a primary key and a customer index), DuckDB (native columnar file), and S3-compatible storage holding zstd Parquet queried in place by DuckDB.</p>
+
+<h3>5.1 Storage footprint</h3>
+<table border="1" cellpadding="6">
+<tr><th>Format</th><th>Size</th></tr>
+<tr><td>CSV export</td><td>1.00 GB</td></tr>
+<tr><td>Postgres table + indexes</td><td>1.29 GB</td></tr>
+<tr><td>DuckDB native file</td><td>108 MB</td></tr>
+<tr><td>Parquet (snappy)</td><td>190 MB</td></tr>
+<tr><td>Parquet (zstd)</td><td>116 MB</td></tr>
+<tr><td>Redis, hot 300k rows only</td><td>272 MB</td></tr>
+<tr><td>Redis, if all 5M rows lived in RAM (estimate)</td><td>~4.5 GB</td></tr>
+</table>
+<p>Postgres vs zstd Parquet is about <b>11x</b> larger for the same rows.</p>
+
+<h3>5.2 The race: typical results (local laptop, warm; yours will vary)</h3>
+<table border="1" cellpadding="6">
+<tr><th>Workload</th><th>Redis</th><th>Postgres</th><th>DuckDB</th><th>S3 + Parquet</th><th>Lesson</th></tr>
+<tr><td>1. Fetch one order by id</td><td>~0.4-1 ms</td><td>~0.7-2 ms</td><td>~2-3 ms</td><td>~30 ms</td><td>RAM and row stores win. DuckDB/Parquet manage only because ids are sorted (min/max skipping).</td></tr>
+<tr><td>2. All orders of one customer</td><td>~1.5 ms (partial)</td><td>~1.2 ms</td><td>~4 ms</td><td>~26 ms</td><td>Postgres wins with its index. Redis holds only the hot 300k orders, so its answer is partial.</td></tr>
+<tr><td>3. Revenue per category (5M rows)</td><td>~0.8 ms (precomputed)</td><td>~270 ms</td><td>~3-4 ms</td><td>~15-19 ms</td><td>Columnar wins the real computation, ~50-80x faster than Postgres. Redis only answers questions someone precomputed.</td></tr>
+<tr><td>4. A brand-new question (refund value by country)</td><td>~1.8 s (app-side scan)</td><td>~130 ms</td><td>~3 ms</td><td>~19 ms</td><td>Redis cannot answer unplanned questions. Postgres' gap grows linearly with data size.</td></tr>
+<tr><td>5. Insert one order</td><td>~1 ms</td><td>~2.6 ms</td><td>~5.6 ms</td><td>~21 ms</td><td>On S3 every write is a new object; writing row by row creates tiny files.</td></tr>
+<tr><td>6. Change one value</td><td>~0.5 ms</td><td>~2.3 ms</td><td>~3 ms</td><td>~118 ms</td><td>Parquet is immutable: S3 rewrote ~205,000 rows to change one. This is why table formats (Iceberg, Delta) exist (Session 4).</td></tr>
+</table>
+<p><b>Honest caveats:</b> S3 is a local S3-compatible server, so real S3 adds roughly 20-100 ms per request. Redis holds only the hot 300k rows. The DuckDB file cache is disabled so every S3 run really hits object storage. Timings vary run to run.</p>
+
+<h3>5.3 Demo queries (run them yourself)</h3>
+<p>The SQL below runs unchanged on Postgres, DuckDB (native table <code>orders</code>) and Parquet (a view named <code>orders</code> over <code>s3://lake/orders/orders.parquet</code>).</p>
+<pre>-- 1. Point lookup
+SELECT * FROM orders WHERE order_id = 4800000;
+
+-- 2. One customer's orders
+SELECT order_id, customer_id, category, amount, status
+FROM orders WHERE customer_id = 2 ORDER BY order_id;
+
+-- 3. Revenue by category
+SELECT category, round(sum(amount),2) AS revenue
+FROM orders GROUP BY 1 ORDER BY 2 DESC;
+
+-- 4. A brand-new question
+SELECT country, round(avg(amount),2) AS avg_order_value, count(*) AS orders
+FROM orders
+WHERE status = 'refunded' AND created_at &gt;= '2025-01-01'
+GROUP BY 1 ORDER BY 2 DESC;</pre>
+<p>Redis equivalents: <code>HGETALL order:4800000</code>, <code>SMEMBERS cust:2</code>, <code>HGETALL agg:revenue_by_category</code>.</p>
+<p><b>Parquet X-ray (DuckDB on object storage):</b></p>
+<pre>-- Footer: min/max per row group
+SELECT row_group_id AS rg, path_in_schema AS col,
+       stats_min_value AS min, stats_max_value AS max,
+       total_compressed_size AS bytes
+FROM parquet_metadata('s3://lake/orders/orders.parquet')
+WHERE path_in_schema IN ('order_id','status') AND row_group_id &lt; 3
+ORDER BY 1, 2;
+
+-- Partition pruning: 1 file vs 24
+SELECT count(*) AS orders, count(DISTINCT filename) AS files_read
+FROM read_parquet('s3://lake/orders_by_month/*/*/*.parquet',
+                  hive_partitioning=true, filename=true)
+WHERE order_year = 2025 AND order_month = 6;</pre>
+
+<h2>6. Cheat-sheet: pick the store by access pattern</h2>
+<table border="1" cellpadding="6">
+<tr><th>I need…</th><th>Redis</th><th>Postgres</th><th>DuckDB / OLAP</th><th>S3 + Parquet</th></tr>
+<tr><td>Sub-millisecond reads by key</td><td><b>Best</b></td><td>Good</td><td>Painful</td><td>Painful</td></tr>
+<tr><td>ACID transactions &amp; integrity</td><td>Painful</td><td><b>Best</b></td><td>Painful</td><td>Wrong tool</td></tr>
+<tr><td>Frequent single-row updates</td><td><b>Best</b></td><td><b>Best</b></td><td>Painful</td><td>Wrong tool</td></tr>
+<tr><td>Big scans &amp; aggregations</td><td>Wrong tool</td><td>Painful</td><td><b>Best</b></td><td>Good</td></tr>
+<tr><td>Unplanned, ad-hoc questions</td><td>Wrong tool</td><td>Good</td><td><b>Best</b></td><td>Good</td></tr>
+<tr><td>Cheap long-term retention</td><td>Wrong tool</td><td>Painful</td><td>Good</td><td><b>Best</b></td></tr>
+</table>
+<p>Real systems use several together: Postgres is the source of truth, Redis caches the hot path, events land in S3 as Parquet, and DuckDB or a warehouse answers analytics. That chain <i>is</i> the architecture from section 1.</p>
+
+<h2>7. Self-check quiz (answers at the end of each question)</h2>
+<ol>
+<li>A login service stores 1M sessions that each expire after 30 minutes and are read on every request. Best fit? <br><b>Answer: Redis with a TTL.</b> In-memory, sub-millisecond, native key expiry.</li>
+<li>Why is SELECT SUM(amount) faster on a columnar file than on a row store? <br><b>Answer: it reads only the amount column, and that column compresses well.</b></li>
+<li>You must change ONE value inside a 200 MB Parquet file on S3. What happens? <br><b>Answer: the file is rewritten (or replaced by a new file).</b> Objects and Parquet files are immutable; Iceberg/Delta add metadata so a change becomes a new file plus a pointer swap.</li>
+<li>You partition 5M orders by customer_id (200k distinct values). Result? <br><b>Answer: 200,000 tiny files, the small-files problem.</b></li>
+<li>Why does WHERE order_id = 4200000 on sorted Parquet read almost nothing? <br><b>Answer: min/max statistics in the footer let the engine skip row groups.</b> On an unsorted column the ranges overlap and nothing is skipped.</li>
+<li>7 years of audit logs, almost never read, must be cheap and durable. Where? <br><b>Answer: object storage (Parquet) with a lifecycle policy to a colder tier.</b></li>
+</ol>
+
+<h2>8. Three things to remember</h2>
+<ol>
+<li><b>Layout is architecture.</b> Row vs column, sort order and partitioning decide speed and cost before any tuning.</li>
+<li><b>One store never fits all.</b> Hot → RAM, transactional → row store, analytical → columnar, everything else → cheap object storage.</li>
+<li><b>The cheapest query touches the least data.</b> Skip with stats, prune with partitions, project only the columns you need.</li>
+</ol>
+
+<h2>9. Glossary</h2>
+<table border="1" cellpadding="6">
+<tr><td><b>OLTP / OLAP</b></td><td>Transaction processing (many small reads/writes) vs analytical processing (few big scans).</td></tr>
+<tr><td><b>ACID</b></td><td>Atomicity, Consistency, Isolation, Durability: the guarantees of a transactional database.</td></tr>
+<tr><td><b>TTL</b></td><td>Time to live: a key that deletes itself after a set time.</td></tr>
+<tr><td><b>Row group / column chunk</b></td><td>The two levels a Parquet file is chopped into.</td></tr>
+<tr><td><b>Predicate pushdown</b></td><td>Using filters plus min/max stats to avoid reading data at all.</td></tr>
+<tr><td><b>Partition pruning</b></td><td>Skipping whole folders/files because their path value cannot match the filter.</td></tr>
+<tr><td><b>Small-files problem</b></td><td>Too many tiny files make listing and opening cost more than reading.</td></tr>
+<tr><td><b>Skew</b></td><td>Uneven data distribution that leaves one worker or partition doing most of the work.</td></tr>
+<tr><td><b>Decoupled storage and compute</b></td><td>Data sits in cheap object storage; engines are started only when needed.</td></tr>
+</table>
+
+<h2>10. Next steps</h2>
+<ul>
+<li><b>Homework (Session 1 exercise):</b> design the capstone's raw / processed / curated bucket structure, assign access boundaries, and define lifecycle rules.</li>
+<li><b>Session 2 exercise:</b> given a large skewed dataset, choose between Parquet, ORC and Avro, design the partitioning scheme, and estimate storage and query cost.</li>
+<li>Re-run the demo: ask your instructor for the lab folder (<code>docker compose up --build</code>, then open localhost:8000).</li>
+</ul>
+</body></html>

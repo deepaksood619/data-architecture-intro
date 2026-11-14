@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Where does your data live? - Data Architecture intro</title>
+<link rel="stylesheet" href="vendor/reveal/reset.css">
+<link rel="stylesheet" href="vendor/reveal/reveal.css">
+<link rel="stylesheet" href="deck.css">
+</head>
+<body>
+<div id="pill">lab: connecting…</div>
+<div class="reveal"><div class="slides">
+
+<!-- ═══════════ 1 · TITLE ═══════════ -->
+<section>
+  <div class="kicker">Data Architecture · Intro session</div>
+  <h1>Where does your<br><span class="grad">data live?</span></h1>
+  <p class="hero-sub">A 30-minute tour of the modern data stack, then one deep dive: how storage layout decides speed, cost and what is even possible.</p>
+  <div class="stores">
+    <span class="bg-redis">Redis</span><span class="bg-pg">Postgres</span><span class="bg-duck">DuckDB</span><span class="bg-s3">S3 + Parquet</span>
+  </div>
+  <p class="tiny mut" style="margin-top:1.6em">Press <b>S</b> for speaker view · <b>Esc</b> for overview</p>
+  <aside class="notes">
+    0:00 (30s). Promise: by the end you can look at any data problem and say which store, why, and roughly what it costs.
+    Plan: map of the whole course, meet four stores, a deep dive on row vs columnar layout, then a live demo on real engines, then a quiz.
+  </aside>
+</section>
+
+<!-- ═══════════ 2 · AGENDA ═══════════ -->
+<section>
+  <div class="kicker">Run of show · 30 min</div>
+  <h2>What we'll cover</h2>
+  <div class="timeline">
+    <div style="flex:3;background:#c3a6ff">Map 3'</div>
+    <div style="flex:3;background:var(--redis)">Four stores 3'</div>
+    <div style="flex:4;background:var(--duck)">Which store? 3'</div>
+    <div style="flex:5;background:var(--s3)">Deep dive 5'</div>
+    <div style="flex:9;background:var(--pg)">Live demo 9'</div>
+    <div style="flex:4;background:#ff9ecb">Quiz 4'</div>
+  </div>
+  <div class="agenda">
+    <div class="panel"><b>1 · The map</b>The whole data architecture on one page, mapped to the 24-session course.</div>
+    <div class="panel"><b>2 · Four stores</b>Redis, Postgres, DuckDB, S3: what each is, how it lays data out, where it shines.</div>
+    <div class="panel"><b>3 · Which store?</b>Speed vs cost, then four real scenarios to check yourself.</div>
+    <div class="panel"><b>4 · Deep dive</b>Row vs columnar: how the same table is laid out on disk, and why that decides speed and cost.</div>
+    <div class="panel"><b>5 · Live demo</b>The same 5M orders in all four engines. We compare their sizes, then race six workloads.</div>
+    <div class="panel"><b>6 · Cheat-sheet + quiz</b>One table to remember, then six questions.</div>
+  </div>
+  <aside class="notes">0:30 (30s). Orient only. The demo is the biggest block on purpose.</aside>
+</section>
+
+<!-- ═══════════ 3 · THE MAP (static) ═══════════ -->
+<section>
+  <div class="kicker">1 · The map</div>
+  <h2>The whole data architecture on one page</h2>
+  <div class="map">
+    <div class="lcol"><div class="ic">🧾</div><h4>Sources</h4><p>Where data is born</p><div class="tools">App databases · SaaS APIs · event streams · files</div><div class="ses">S10 Data contracts</div></div>
+    <span class="arr">›</span>
+    <div class="lcol"><div class="ic">🚚</div><h4>Ingestion</h4><p>Move it in</p><div class="tools">Batch ELT · log-based CDC · Kafka</div><div class="ses">S11 · S12</div></div>
+    <span class="arr">›</span>
+    <div class="lcol today"><span class="tag">TODAY</span><div class="ic">🪣</div><h4>Storage</h4><p>Keep it cheap and durable</p><div class="tools">S3 / GCS · Parquet / ORC / Avro · Iceberg / Delta</div><div class="ses">S1 · S2 · S4</div></div>
+    <span class="arr">›</span>
+    <div class="lcol"><span class="tag demo">DEMO</span><div class="ic">⚙️</div><h4>Compute &amp; modeling</h4><p>Shape it</p><div class="tools">Snowflake · BigQuery · Spark · DuckDB · dbt</div><div class="ses">S3 · S5 – S8</div></div>
+    <span class="arr">›</span>
+    <div class="lcol"><span class="tag demo">DEMO</span><div class="ic">⚡</div><h4>Serving</h4><p>Make it fast to ask</p><div class="tools">Redis · ClickHouse / Pinot · semantic layer · reverse ETL</div><div class="ses">S13 – S15</div></div>
+    <span class="arr">›</span>
+    <div class="lcol"><div class="ic">📈</div><h4>Consumption</h4><p>Use it</p><div class="tools">BI · apps · ML · RAG / vector search</div><div class="ses">S21 AI data</div></div>
+  </div>
+  <div class="cross">
+    <div class="xbar"><b>Orchestration</b> S9</div><div class="xbar"><b>Governance &amp; security</b> S19</div><div class="xbar"><b>Observability</b> S20</div><div class="xbar"><b>FinOps</b> S18</div><div class="xbar"><b>CI/CD · IaC</b> S16 · S17</div>
+  </div>
+  <div class="ribbon">Capstone · S22 design the whole thing → S23 review cost &amp; governance → S24 defend it</div>
+  <aside class="notes">
+    1:00 (3 min). Walk left to right: data is born in sources, moves in via ingestion, rests in storage, is shaped by compute, served fast, then consumed.
+    The dashed bars underneath apply to every layer. Point at TODAY (storage, sessions 1-2) and the DEMO badges (the live demo touches compute via DuckDB and serving via Redis).
+    Each box is one to three sessions of the course; the capstone ties it all together.
+  </aside>
+</section>
+
+<!-- ═══════════ 4 · FOUR STORES (static) ═══════════ -->
+<section>
+  <div class="kicker">2 · Four stores</div>
+  <h2>Meet the four stores we'll compare</h2>
+  <div class="cards4">
+    <div class="sc" style="--c:var(--redis)">
+      <h4>Redis</h4><div class="sub">In-memory key → value</div>
+      <div class="viz kv"><span>session:42</span><i>→</i><b>{cart…}</b><span>user:7</span><i>→</i><b>{…}</b><span>hits:home</span><i>→</i><b>1,204</b></div>
+      <div class="gw"><b class="good">Great</b> sub-ms reads · key expiry (TTL) · counters</div>
+      <div class="gw"><b class="bad">Weak</b> RAM is expensive · no ad-hoc queries</div>
+      <div class="use">Sessions · caches · rate limits · leaderboards</div>
+    </div>
+    <div class="sc" style="--c:var(--pg)">
+      <h4>Postgres</h4><div class="sub">Row-oriented relational (OLTP)</div>
+      <div class="viz rows"><div><i class="col0"></i><i class="col1"></i><i class="col2"></i><i class="col3"></i><i class="col4"></i></div><div><i class="col0"></i><i class="col1"></i><i class="col2"></i><i class="col3"></i><i class="col4"></i></div><div><i class="col0"></i><i class="col1"></i><i class="col2"></i><i class="col3"></i><i class="col4"></i></div></div>
+      <div class="gw"><b class="good">Great</b> ACID transactions · indexes · fast updates</div>
+      <div class="gw"><b class="bad">Weak</b> scanning wide tables for analytics</div>
+      <div class="use">System of record · app backends · orders · profiles</div>
+    </div>
+    <div class="sc" style="--c:var(--duck)">
+      <h4>DuckDB / OLAP</h4><div class="sub">Columnar analytical engine</div>
+      <div class="viz cols"><div class="col0"></div><div class="col1"></div><div class="col2"></div><div class="col3"></div><div class="col4"></div></div>
+      <div class="gw"><b class="good">Great</b> scans · aggregations · compression · SQL on files</div>
+      <div class="gw"><b class="bad">Weak</b> single-row updates · many small writes</div>
+      <div class="use">Analytics · BI · warehouses · embedded / laptop</div>
+    </div>
+    <div class="sc" style="--c:var(--s3)">
+      <h4>S3 + Parquet</h4><div class="sub">Object storage + open file format</div>
+      <div class="viz objs"><span>📁 raw/</span><span>📁 orders/</span><span class="f">▤ part-0.parquet</span><span class="f">▤ part-1.parquet</span></div>
+      <div class="gw"><b class="good">Great</b> cheapest durable bytes · infinite scale · decoupled compute</div>
+      <div class="gw"><b class="bad">Weak</b> high first-byte latency · immutable files</div>
+      <div class="use">Data lake · landing zone · archives · history</div>
+    </div>
+  </div>
+  <p class="small mut" style="margin-top:12px">Same data can live in all four, each answers a different question well.</p>
+  <aside class="notes">
+    4:00 (3 min). One card at a time, 40 seconds each. For each: what shape is the data inside, what is it great at, what breaks it.
+    Redis = a giant in-memory dictionary. Postgres = rows kept together so one record is one read. DuckDB = columns kept together so one column is one read.
+    S3 = a bucket of immutable files; Parquet is the columnar file format inside. Tease: the demo uses all four on the same 5M orders.
+  </aside>
+</section>
+
+<!-- ═══════════ 5 · LADDER (static) ═══════════ -->
+<section>
+  <div class="kicker">3 · Which store?</div>
+  <h2>Every store trades <span class="c-redis">speed</span> against <span class="c-s3">cost</span></h2>
+  <table class="ladder" id="ladder"></table>
+  <p class="tiny mut">Order-of-magnitude, storage-only list prices (us-east-1 style). Log scale: RAM costs hundreds of times more per byte than object storage.</p>
+  <aside class="notes">
+    7:00 (1.5 min). All four rows show together and the bars grow on entry. There is no best store, only a best store per access pattern.
+    Fast and cheap do not coexist, so architecture = putting each dataset on the cheapest tier that still meets its latency need.
+  </aside>
+</section>
+
+<!-- ═══════════ 6 · WHICH STORE (static, answers via fragments) ═══════════ -->
+<section>
+  <div class="kicker">3 · Which store? · check yourself</div>
+  <h2>Four scenarios, four different answers</h2>
+  <div class="scen">
+    <div class="srow"><div class="q">🛒 <b>Shopping-cart sessions</b><br><span class="mut">expire in 30 min, read on every page view</span></div><span class="arr">→</span>
+      <div class="a fragment" style="--c:var(--redis)"><b>Redis</b><br>in-memory + native TTL: sub-ms reads, auto-expiry</div></div>
+    <div class="srow"><div class="q">👤 <b>Customer profiles</b><br><span class="mut">edited by the app, read by ID, never lose a write</span></div><span class="arr">→</span>
+      <div class="a fragment" style="--c:var(--pg)"><b>Postgres</b><br>ACID, all fields of a row together, indexed by key</div></div>
+    <div class="srow"><div class="q">📊 <b>5 years of orders</b><br><span class="mut">finance asks a new SUM / GROUP BY every week</span></div><span class="arr">→</span>
+      <div class="a fragment" style="--c:var(--duck)"><b>DuckDB / columnar OLAP</b><br>reads only the columns it needs, compresses them</div></div>
+    <div class="srow"><div class="q">🗄️ <b>50 TB of raw clickstream logs</b><br><span class="mut">queried maybe once a month</span></div><span class="arr">→</span>
+      <div class="a fragment" style="--c:var(--s3)"><b>S3 + Parquet</b><br>cheapest durable bytes; spin up an engine only when needed</div></div>
+  </div>
+  <p class="small mut" style="margin-top:12px">"Just use Postgres" would have been wrong three times out of four.</p>
+  <aside class="notes">
+    10:30 (2 min). Read each scenario aloud, let the room shout, then click to reveal the answer.
+    The clues: expiry + sub-ms = Redis; updates + must not lose = Postgres; big scans + unknown questions = columnar; huge + rarely read = object storage.
+  </aside>
+</section>
+
+<!-- ═══════════ 7 · DEEP DIVE (all static) ═══════════ -->
+  <section>
+    <div class="kicker">4 · Deep dive · Session 2 · File formats &amp; storage strategy</div>
+    <h2>Same table. <span class="grad">Two ways to lay it on disk.</span></h2>
+    <div class="row" style="align-items:flex-start">
+      <div class="col" style="flex:.8">
+        <h3>The logical table</h3>
+        <table class="grid" id="laygrid"></table>
+        <p class="tiny mut" style="margin-top:8px">Each coloured block below is one value. Highlighted = the bytes a query must read.</p>
+      </div>
+      <div class="col" style="flex:1.3">
+        <div class="panel" style="margin-bottom:10px"><h3 style="margin-bottom:4px">A · <code>get order #5</code> (one whole row)</h3><div id="lay-A"></div></div>
+        <div class="panel"><h3 style="margin-bottom:4px">B · <code>SUM(amount)</code> (one column, every row)</h3><div id="lay-B"></div></div>
+      </div>
+    </div>
+    <p class="small" style="margin-top:10px"><b>Row store</b> wins when you want a whole record · <b>column store</b> wins when you want a few columns of many records, and each column compresses far better (same type, repeated values).</p>
+    <aside class="notes">
+      15:30 (2 min). Left: the logical table. Right, A: the row store reads one contiguous block (1 seek); the column store has to gather one value from each of 5 columns (5 seeks).
+      B: the row store drags all 40 values through memory to reach 8; the column store reads one contiguous column.
+      Compression: a column holds one type, so dictionary / delta / run-length encoding shrinks it 3-10x. Real numbers come in the demo: 1.29 GB in Postgres vs 116 MB as Parquet.
+    </aside>
+  </section>
+
+  <section data-visibility="hidden"><!-- SKIPPED (slide 8): kept for reference, not shown in the talk -->
+    <div class="kicker">4 · Deep dive · anatomy of a Parquet file</div>
+    <h2>Parquet = row groups → column chunks → footer</h2>
+    <div class="row">
+      <div class="col pq" style="flex:.9">
+        <div class="rg"><b>ROW GROUP 0 · rows 1 – 122,880</b>
+          <div class="chunks"><span class="col0">order_id</span><span class="col1">cust</span><span class="col2">category</span><span class="col3">amount</span><span class="col4">status</span><span class="col0">…</span></div></div>
+        <div class="rg"><b>ROW GROUP 1 · rows 122,881 – 245,760</b>
+          <div class="chunks"><span class="col0">order_id</span><span class="col1">cust</span><span class="col2">category</span><span class="col3">amount</span><span class="col4">status</span><span class="col0">…</span></div></div>
+        <div class="rg"><b>… 41 row groups for 5M rows</b></div>
+        <div class="footer">FOOTER: schema · per-chunk <b>min / max</b> · offsets<br><span class="mut">read first → decide which chunks to skip</span></div>
+      </div>
+      <div class="col" style="flex:1.1">
+        <h3>The footer of our real 5M-row file</h3>
+        <table class="res static">
+          <tr><th>row group</th><th>column</th><th>min</th><th>max</th><th>bytes (zstd)</th></tr>
+          <tr><td>0</td><td>order_id</td><td>1</td><td>122,880</td><td>162,139</td></tr>
+          <tr><td>0</td><td>status</td><td>cancelled</td><td>shipped</td><td>26,173</td></tr>
+          <tr><td>1</td><td>order_id</td><td>122,881</td><td>245,760</td><td>124,817</td></tr>
+        </table>
+        <p class="small" style="margin-top:10px"><b>order_id</b> ranges never overlap → the engine can skip whole row groups. <b>status</b> has the same min/max everywhere → useless for skipping.</p>
+        <p class="small mut">We'll open this footer live in the demo.</p>
+      </div>
+    </div>
+    <aside class="notes">
+      17:30 (1 min). A Parquet file is chopped into row groups (about 120k rows); inside each, one chunk per column; the footer at the end stores each chunk's min and max.
+      The numbers on the right were read from the real file the demo uses. order_id is sorted so its ranges are disjoint; status is not, so no skipping.
+    </aside>
+  </section>
+
+  <section data-visibility="hidden"><!-- SKIPPED (slide 9): kept for reference, not shown in the talk -->
+    <div class="kicker">4 · Deep dive · skipping data (predicate pushdown)</div>
+    <h2>One filter skips <span class="c-s3">40 of 41</span> row groups. Another skips <span class="bad">none</span>.</h2>
+    <div class="row">
+      <div class="col panel">
+        <h3 style="margin-bottom:6px"><code>WHERE order_id = 4,200,000</code></h3>
+        <div class="rgs" id="rg-sorted"></div>
+        <p class="small" style="margin-top:8px">Footer says only one row group's range contains it → <b class="good">1 of 41 read</b>. Measured locally ≈ <b>6 ms</b>.</p>
+      </div>
+      <div class="col panel">
+        <h3 style="margin-bottom:6px"><code>WHERE customer_id = 4242</code></h3>
+        <div class="rgs" id="rg-unsorted"></div>
+        <p class="small" style="margin-top:8px">Every row group's range spans 1 – 200,000 → <b class="bad">41 of 41 read</b>. Measured locally ≈ <b>12 ms</b>.</p>
+      </div>
+    </div>
+    <p class="small" style="margin-top:12px"><b>Sort or cluster data by the column you filter on most.</b> Locally the gap is only ~2× because fixed HTTP overhead dominates; on real S3 every skipped row group is a skipped network request, so the gap grows with latency and data size. (Same idea as clustering keys in Snowflake / BigQuery, Session 3.)</p>
+    <aside class="notes">
+      18:30 (1 min). Green = read, grey = skipped. The engine reads the footer first, compares the filter to each chunk's min/max, and only fetches survivors.
+      Be honest about the 2x: it is the mechanism that matters. Live version of both queries is in the demo.
+    </aside>
+  </section>
+
+  <section data-visibility="hidden"><!-- SKIPPED (slide 10): kept for reference, not shown in the talk -->
+    <div class="kicker">4 · Deep dive · partitioning &amp; formats</div>
+    <h2>Partition by what you <span class="c-s3">filter</span>, not by what you <span class="bad">have</span></h2>
+    <div class="row">
+      <div class="col">
+        <div class="tree mono">
+<span class="mut">s3://lake/orders_by_month/</span>
+├─ order_year=2024/ <span class="mut">(12 folders)</span>
+└─ order_year=2025/
+   ├─ order_month=1/ <span class="dim">part.parquet</span>
+   ├─ …
+   ├─ <span class="hot">order_month=6/ part.parquet  ◀ the only file opened</span>
+   └─ order_month=12/ <span class="dim">part.parquet</span>
+        </div>
+        <p class="small" style="margin-top:10px"><code>WHERE order_year=2025 AND order_month=6</code> → <b class="good">1 file</b> read.<br>No filter → <b class="bad">24 files</b> read. The cheapest query is the one that never touches the data.</p>
+      </div>
+      <div class="col small">
+        <div class="panel" style="margin-bottom:8px"><b class="good">✓ order_year / order_month</b><br>24 folders · matches the filter · similar sizes</div>
+        <div class="panel" style="margin-bottom:8px"><b class="bad">✕ customer_id</b><br>200,000 folders of ~25 rows → the <i>small-files problem</i>: listing and opening files costs more than reading data</div>
+        <div class="panel" style="margin-bottom:8px"><b style="color:var(--warn)">⚠ country</b><br>IN holds 17% of rows, BR only 5% → <i>skew</i>: one partition 3× its peers, one worker still busy while the rest idle</div>
+        <table class="fmt"><tr><th></th><th>Parquet</th><th>ORC</th><th>Avro</th></tr>
+          <tr><td>Layout</td><td>columnar</td><td>columnar</td><td>row</td></tr>
+          <tr><td>Best for</td><td>analytics, lakes</td><td>Hive / Hadoop</td><td>streaming, Kafka</td></tr></table>
+      </div>
+    </div>
+    <aside class="notes">
+      19:30 (1.5 min). Folder names ARE the partition values, so the engine prunes by path without opening anything.
+      Rule of thumb: low-cardinality columns you always filter by (date, region); never ids. Skew (country) is the Session-2 exercise.
+      Formats: Parquet is the default for analytics; ORC is its Hadoop cousin; Avro is row-based, used when streaming records.
+    </aside>
+  </section>
+
+
+<!-- ═══════════ 8 · LIVE DEMO (the interactive part) ═══════════ -->
+  <section id="lab-foot">
+    <div class="kicker">5 · Live demo · 9 min</div>
+    <h2>Same 5,000,000 orders. <span class="grad">Four homes.</span></h2>
+    <div class="fp" id="fp"></div>
+    <p class="small mut" style="margin-top:12px">Row store pays for indexes and per-row overhead · columnar stores compress by column · Redis pays RAM prices for every byte.</p>
+    <aside class="notes">
+      21:00 (1 min). Real sizes read from the running engines. Postgres 1.3 GB vs Parquet-zstd ~115 MB: about 11x.
+      Redis holds only the hot 300k rows; the hatched bar extrapolates all 5M in RAM.
+    </aside>
+  </section>
+
+  <section id="lab-race">
+    <div class="kicker">5 · Live demo · the race</div>
+    <div class="tabs" id="tabs"></div>
+    <div class="ask" id="ask"></div>
+    <div class="lanes" id="lanes"></div>
+    <div class="row" style="margin-top:8px;align-items:center">
+      <button class="btn primary" id="runall">▶ Run all four</button>
+      <div class="take" id="take" style="flex:1;margin:0 0 0 14px"></div>
+    </div>
+    <aside class="notes">
+      22:00 (5 min). Go through the tabs in order, ask the room to predict the winner first, then Run all four.
+      1 Point lookup: Redis and Postgres sub-ms; DuckDB/S3 are OK only because ids are sorted (min/max skipping).
+      2 One customer's orders: Postgres index wins; columnar must scan. Redis answers only 2 of ~25 orders: cache coverage.
+      3 Revenue by category: Redis wins only because it was precomputed. DuckDB beats Postgres by ~50-80x.
+      4 Brand-new question: Redis cannot answer; app-side scan of 300k keys is slower than DuckDB scanning 5M rows.
+      5 Write one: Redis/Postgres/DuckDB fine. S3 writes a brand-new object per row (small-files problem).
+      6 Change one value: S3 rewrites ~205k rows to change one. Parquet is immutable, hence Iceberg/Delta (Session 4).
+      Caveat to say aloud: S3 is local here; real S3 adds ~20-100 ms per request. SQL lanes are editable: take audience requests.
+    </aside>
+  </section>
+
+  <section id="lab-xray" data-visibility="hidden"><!-- SKIPPED (slide 13): kept for reference, not shown in the talk -->
+    <div class="kicker">5 · Live demo · Parquet X-ray</div>
+    <h2>Open the file we just talked about</h2>
+    <div class="row">
+      <div class="col sqlbox" data-lane="s3" data-title="1 · The footer (min/max per row group)" data-rows="4">
+<textarea rows="6">SELECT row_group_id AS rg, path_in_schema AS col,
+       stats_min_value AS min, stats_max_value AS max,
+       total_compressed_size AS bytes
+FROM parquet_metadata('s3://lake/orders/orders.parquet')
+WHERE path_in_schema IN ('order_id','status') AND row_group_id < 3
+ORDER BY 1, 2</textarea></div>
+      <div class="col">
+        <div class="sqlbox" data-lane="s3" data-title="2a · Filter on the sorted column" data-rows="1">
+<textarea rows="3">SELECT order_id, amount, status
+FROM orders WHERE order_id = 4200000</textarea></div>
+        <div class="sqlbox" style="margin-top:10px" data-lane="s3" data-title="2b · Filter on an unsorted column" data-rows="1">
+<textarea rows="3">SELECT order_id, amount, status
+FROM orders WHERE customer_id = 4242
+ORDER BY order_id LIMIT 3</textarea></div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div class="col sqlbox" data-lane="s3" data-title="3a · Partition pruning: filter on month" data-rows="1">
+<textarea rows="5">SELECT count(*) AS orders, count(DISTINCT filename) AS files_read
+FROM read_parquet('s3://lake/orders_by_month/*/*/*.parquet',
+                  hive_partitioning=true, filename=true)
+WHERE order_year = 2025 AND order_month = 6</textarea></div>
+      <div class="col sqlbox" data-lane="s3" data-title="3b · No filter: every folder" data-rows="1">
+<textarea rows="5">SELECT count(*) AS orders, count(DISTINCT filename) AS files_read
+FROM read_parquet('s3://lake/orders_by_month/*/*/*.parquet',
+                  hive_partitioning=true, filename=true)</textarea></div>
+    </div>
+    <p class="tiny mut" style="margin-top:8px">Bucket console: <a href="http://localhost:9001" target="_blank">localhost:9001</a> (minioadmin / minioadmin) to show the folders.</p>
+    <aside class="notes">
+      27:00 (2 min if time allows; skip 3 if short). Run 1: the real footer. Run 2a then 2b: expect about 6 ms vs 12 ms locally.
+      Run 3a then 3b: files_read 1 vs 24 = partition pruning.
+    </aside>
+  </section>
+
+
+<!-- ═══════════ 9 · CHEAT SHEET (static) ═══════════ -->
+<section>
+  <div class="kicker">6 · Cheat-sheet</div>
+  <h2>Pick the store by the <span class="grad">access pattern</span></h2>
+  <table class="mx" id="mx"></table>
+  <p class="small mut">●●● best fit · ●● workable · ● painful · ✕ wrong tool. Green = the winner for that need.</p>
+  <aside class="notes">
+    29:00 (1 min). Real systems use several: Postgres is the source of truth, Redis caches the hot path, events land in S3 as Parquet,
+    DuckDB or a warehouse answers analytics. That chain IS the architecture from the map slide.
+  </aside>
+</section>
+
+<!-- ═══════════ 10 · QUIZ ═══════════ -->
+<section>
+  <div id="quiz">
+    <div class="kicker">7 · Quiz</div>
+    <div class="dots" id="qdots"></div>
+    <div id="qbody"></div>
+  </div>
+  <aside class="notes">
+    Keys 1-4 answer, Enter advances. Six questions ~3-4 minutes; cut to four if short on time.
+  </aside>
+</section>
+
+<!-- ═══════════ 11 · WRAP ═══════════ -->
+<section>
+  <div class="kicker">Wrap-up</div>
+  <h2>Three things to remember</h2>
+  <ul class="small" style="font-size:.85em;list-style:none;padding:0">
+    <li><span class="c-pg">①</span> <b>Layout is architecture.</b> Row vs column, sort order and partitioning decide speed <i>and</i> cost, before any tuning.</li>
+    <li><span class="c-duck">②</span> <b>One store never fits all.</b> Hot → RAM, transactional → row store, analytical → columnar, everything else → cheap object storage.</li>
+    <li><span class="c-s3">③</span> <b>The cheapest query touches the least data.</b> Skip with stats, prune with partitions, project only the columns you need.</li>
+  </ul>
+  <h3 style="margin-top:1.2em">Where this goes in the 24-session course</h3>
+  <div class="course">
+    <div class="now"><b>S1–2 · Storage</b>cloud storage, formats, partitioning ← today</div>
+    <div><b>S3–6 · Compute</b>warehouses, lakehouse, Spark, DuckDB</div>
+    <div><b>S7–10 · Modeling</b>dimensional, wide tables, DAGs, contracts</div>
+    <div><b>S11–15 · Move &amp; serve</b>CDC, streaming, real-time OLAP, semantics</div>
+    <div><b>S16–21 · Operate</b>CI/CD, IaC, FinOps, governance, observability, AI</div>
+    <div><b>S22–24 · Capstone</b>design · review · defend</div>
+  </div>
+  <p class="small" style="margin-top:14px">Student notes (Google Doc) have everything on these slides plus the demo queries.</p>
+  <aside class="notes">Close at ~30:00. Homework: Session 1's exercise, design the capstone's raw / processed / curated bucket structure.</aside>
+</section>
+
+</div></div>
+
+<script src="vendor/reveal/reveal.js"></script>
+<script src="vendor/reveal/plugin/notes.js"></script>
+<script src="vendor/reveal/plugin/zoom.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

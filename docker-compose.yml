@@ -1,0 +1,44 @@
+# Four real engines + one API that also embeds DuckDB and serves the deck.
+#   docker compose up --build      ->  http://localhost:8000
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 3s, retries: 20 }
+
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: demo, POSTGRES_PASSWORD: demo, POSTGRES_DB: demo }
+    command: ["postgres", "-c", "shared_buffers=768MB", "-c", "max_parallel_workers_per_gather=2"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U demo"], interval: 3s, retries: 30 }
+
+  minio:                                   # S3-compatible object storage (RustFS; MinIO stopped publishing images)
+    image: rustfs/rustfs:latest
+    environment:
+      RUSTFS_ACCESS_KEY: minioadmin
+      RUSTFS_SECRET_KEY: minioadmin
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports: ["9001:9001"]                   # console: show the bucket / hive folders live (minioadmin / minioadmin)
+    volumes: ["miniodata:/data"]
+    healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:9000/health"], interval: 3s, retries: 30 }
+
+  api:
+    build: ./api
+    ports: ["8000:8000"]
+    environment:
+      N_ROWS: "5000000"
+      PG_DSN: postgresql://demo:demo@postgres:5432/demo
+      REDIS_HOST: redis
+      S3_ENDPOINT: minio:9000
+    volumes:
+      - ./deck:/app/deck:ro                # edit slides, just refresh the browser
+      - apidata:/data
+    depends_on:
+      redis: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+      minio: { condition: service_healthy }
+
+volumes: { pgdata: {}, miniodata: {}, apidata: {} }
